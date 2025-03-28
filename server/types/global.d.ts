@@ -1,8 +1,8 @@
 declare module 'fluent-ffmpeg' {
   interface FfmpegCommand {
-    setFfmpegPath(path: string): FfmpegCommand;
     input(input: string | Buffer): FfmpegCommand;
     outputFormat(format: string): FfmpegCommand;
+    outputOptions(options: string[]): FfmpegCommand;
     on(event: string, callback: (err?: any, ...args: any[]) => void): FfmpegCommand;
     pipe(stream: NodeJS.WritableStream): FfmpegCommand;
     audioBitrate(bitrate: string | number): FfmpegCommand;
@@ -13,6 +13,10 @@ declare module 'fluent-ffmpeg' {
     toFormat(format: string): FfmpegCommand;
     output(output: string | NodeJS.WritableStream): FfmpegCommand;
     run(): void;
+  }
+  
+  namespace ffmpeg {
+    function setFfmpegPath(path: string): void;
   }
   
   function ffmpeg(input?: string | Buffer): FfmpegCommand;

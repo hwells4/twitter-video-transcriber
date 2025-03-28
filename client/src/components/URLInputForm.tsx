@@ -46,7 +46,7 @@ export default function URLInputForm({
       } else if (errorMessage.includes('Twitter API credentials are missing or invalid')) {
         errorMessage = "Twitter API authentication failed. Please check your API credentials.";
       } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
-        errorMessage = "Twitter API rate limit exceeded. Please try again in a few minutes.";
+        errorMessage = "Twitter API rate limit exceeded. Due to Twitter's strict limits (15 requests/15 minutes), please wait at least 15 minutes before trying again. We've added caching to reduce API calls for repeat requests.";
       } else if (errorMessage.includes('not authorized')) {
         errorMessage = "Not authorized to access this tweet. It may be from a private account.";
       } else if (errorMessage.includes('No video found')) {

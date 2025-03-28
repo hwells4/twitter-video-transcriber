@@ -26,6 +26,30 @@ if (hasApiKeyAndSecret) {
   });
 }
 
+// Simple in-memory cache to reduce Twitter API calls
+// This helps us stay under the rate limits
+interface CacheItem<T> {
+  data: T;
+  timestamp: number;
+}
+
+interface Cache {
+  tweets: Map<string, CacheItem<any>>;
+  videoUrls: Map<string, CacheItem<string>>;
+}
+
+// Cache expiration times
+const CACHE_TTL = {
+  tweets: 24 * 60 * 60 * 1000, // 24 hours for tweet data
+  videoUrls: 6 * 60 * 60 * 1000 // 6 hours for video URLs
+};
+
+// Initialize cache
+const cache: Cache = {
+  tweets: new Map(),
+  videoUrls: new Map()
+};
+
 // Choose an available client
 function getClient() {
   const errors: string[] = [];
@@ -55,6 +79,16 @@ function getClient() {
  */
 export async function getTweetById(tweetId: string) {
   try {
+    // Check cache first
+    const cachedTweet = cache.tweets.get(tweetId);
+    const now = Date.now();
+    
+    // Return cached tweet if it exists and is not expired
+    if (cachedTweet && now - cachedTweet.timestamp < CACHE_TTL.tweets) {
+      console.log(`Retrieved tweet ${tweetId} from cache`);
+      return cachedTweet.data;
+    }
+    
     // Get the appropriate client
     const client = getClient();
     
@@ -65,6 +99,13 @@ export async function getTweetById(tweetId: string) {
       'user.fields': ['name', 'username'],
     });
     
+    // Cache the result
+    cache.tweets.set(tweetId, {
+      data: result,
+      timestamp: now
+    });
+    
+    console.log(`Cached tweet ${tweetId} - Twitter API call made`);
     return result;
   } catch (error) {
     // Check if it's a rate limit error
@@ -146,22 +187,50 @@ export async function extractVideoUrl(tweetData: any): Promise<string | null> {
 export async function getTwitterVideoInfo(url: string) {
   try {
     const tweetId = extractTweetId(url);
-    const tweetData = await getTweetById(tweetId);
     
-    if (!tweetData) {
-      throw new Error('Tweet not found');
+    // Check if we have cached video info for this tweet
+    const cachedUrl = cache.videoUrls.get(tweetId);
+    const now = Date.now();
+    
+    let videoUrl: string | null = null;
+    let tweetData;
+    let user;
+    let tweet;
+    
+    // Handle cached video URL case 
+    if (cachedUrl && now - cachedUrl.timestamp < CACHE_TTL.videoUrls) {
+      console.log(`Using cached video URL for tweet ${tweetId}`);
+      videoUrl = cachedUrl.data;
+      
+      // We still need the tweet data for other info
+      tweetData = await getTweetById(tweetId);
+      user = tweetData.includes?.users?.[0];
+      tweet = Array.isArray(tweetData.data) ? tweetData.data[0] : tweetData.data;
+    } else {
+      // Normal flow - get everything from the API
+      tweetData = await getTweetById(tweetId);
+      
+      if (!tweetData) {
+        throw new Error('Tweet not found');
+      }
+      
+      videoUrl = await extractVideoUrl(tweetData);
+      
+      if (!videoUrl) {
+        throw new Error('No video found in tweet');
+      }
+      
+      // Cache the video URL
+      cache.videoUrls.set(tweetId, {
+        data: videoUrl,
+        timestamp: now
+      });
+      
+      user = tweetData.includes?.users?.[0];
+      tweet = Array.isArray(tweetData.data) ? tweetData.data[0] : tweetData.data;
+      
+      console.log(`Cached video URL for tweet ${tweetId}`);
     }
-    
-    const videoUrl = await extractVideoUrl(tweetData);
-    
-    if (!videoUrl) {
-      throw new Error('No video found in tweet');
-    }
-    
-    const user = tweetData.includes?.users?.[0];
-    
-    // Get the tweet text from the tweet data
-    const tweet = Array.isArray(tweetData.data) ? tweetData.data[0] : tweetData.data;
     
     return {
       tweetId,

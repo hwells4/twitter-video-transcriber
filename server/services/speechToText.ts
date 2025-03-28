@@ -14,7 +14,12 @@ import wav from 'node-wav';
 
 // Set ffmpeg path
 if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+  try {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+    console.log("ffmpeg path set to:", ffmpegStatic);
+  } catch (error) {
+    console.error("Failed to set ffmpeg path:", error);
+  }
 }
 
 // Create a temporary directory if it doesn't exist
@@ -44,7 +49,7 @@ export async function extractAudioFromVideo(videoBuffer: Buffer): Promise<string
         .audioCodec('pcm_s16le')
         .audioChannels(1)
         .audioFrequency(16000)
-        .format('wav')
+        .toFormat('wav')
         .output(audioPath)
         .on('end', () => resolve(audioPath))
         .on('error', (err: any) => reject(new Error(`FFmpeg error: ${err.message}`)))
@@ -67,9 +72,14 @@ export async function extractAudioFromVideo(videoBuffer: Buffer): Promise<string
  * Transcribes audio to text
  * @param audioPath Path to the audio file
  * @param language Language to transcribe (ISO 639-1 code or 'auto')
+ * @param timestampFormat Format for timestamps ('none', 'seconds', or 'detailed')
  * @returns A transcript with segments
  */
-export async function transcribeAudio(audioPath: string, language: string = 'auto'): Promise<{ segments: { timestamp: string, text: string }[], language: string }> {
+export async function transcribeAudio(
+  audioPath: string, 
+  language: string = 'auto', 
+  timestampFormat: string = 'seconds'
+): Promise<{ segments: { timestamp: string, text: string }[], language: string }> {
   try {
     // Read WAV file
     const audioFile = fs.readFileSync(audioPath);
@@ -89,9 +99,9 @@ export async function transcribeAudio(audioPath: string, language: string = 'aut
     // Clean up the audio file
     fs.unlinkSync(audioPath);
     
-    // Format the transcript segments
+    // Format the transcript segments with the requested timestamp format
     const segments = result.chunks.map((chunk: TranscriptionChunk) => {
-      const startTime = formatTimestamp(chunk.timestamp[0]);
+      const startTime = formatTimestamp(chunk.timestamp[0], timestampFormat);
       return {
         timestamp: startTime,
         text: chunk.text.trim(),

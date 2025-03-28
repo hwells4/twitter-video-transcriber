@@ -220,30 +220,13 @@ async function processTwitterVideo(input: TwitterUrlInput) {
     const audioPath = await extractAudioFromVideo(videoBuffer);
     broadcastProgress(3, 100, "Audio extracted successfully");
     
-    // Step 4: Transcribe the audio
+    // Step 4: Transcribe the audio with the requested timestamp format
     broadcastProgress(4, 10, "Beginning transcription process...");
-    const transcriptionResult = await transcribeAudio(audioPath, input.language);
+    const transcriptionResult = await transcribeAudio(audioPath, input.language, input.timestampFormat);
     broadcastProgress(4, 50, "Transcription in progress...");
     
-    // Step 5: Format the segments with the requested timestamp format
-    const segments = transcriptionResult.segments.map(segment => {
-      // Parse the timestamp as seconds
-      const timestampMatch = segment.timestamp.match(/(\d+):(\d+)/);
-      let seconds = 0;
-      
-      if (timestampMatch) {
-        const minutes = parseInt(timestampMatch[1]);
-        const secs = parseInt(timestampMatch[2]);
-        seconds = minutes * 60 + secs;
-      } else {
-        seconds = parseInt(segment.timestamp);
-      }
-      
-      return {
-        timestamp: formatTimestamp(seconds, input.timestampFormat),
-        text: segment.text
-      };
-    });
+    // No need to reformat the segments as transcribeAudio now uses the requested format
+    const segments = transcriptionResult.segments;
     
     broadcastProgress(4, 100, "Transcription completed successfully");
     
@@ -291,87 +274,5 @@ async function processTwitterVideo(input: TwitterUrlInput) {
   }
 }
 
-// Helper function to create mock transcript data for development/testing
-async function createMockTranscript(input: TwitterUrlInput) {
-  // Extract Twitter username and video ID from URL
-  const urlMatch = input.url.match(/(?:twitter|x)\.com\/(\w+)\/status\/(\d+)/i);
-  
-  if (!urlMatch) {
-    throw new Error("Invalid Twitter URL format");
-  }
-  
-  const [_, username, videoId] = urlMatch;
-  
-  // Simulate progress updates
-  broadcastProgress(1, 10, "Connecting to Twitter API...");
-  await new Promise(resolve => setTimeout(resolve, 500));
-  broadcastProgress(1, 100, "Successfully fetched video details from Twitter");
-  
-  await new Promise(resolve => setTimeout(resolve, 500));
-  broadcastProgress(2, 10, "Starting video download...");
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  broadcastProgress(2, 50, "Downloading video data...");
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  broadcastProgress(2, 100, "Video downloaded successfully");
-  
-  await new Promise(resolve => setTimeout(resolve, 500));
-  broadcastProgress(3, 10, "Extracting audio from video...");
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  broadcastProgress(3, 100, "Audio extracted successfully");
-  
-  await new Promise(resolve => setTimeout(resolve, 500));
-  broadcastProgress(4, 10, "Beginning transcription process...");
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  broadcastProgress(4, 50, "Transcription in progress...");
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  // Create sample segments based on timestamp format
-  const segments = createMockSegments(input.timestampFormat);
-  
-  // Calculate duration based on the last segment's timestamp
-  const lastSegment = segments[segments.length - 1];
-  const duration = lastSegment.timestamp.split(':').length > 1 
-    ? lastSegment.timestamp 
-    : `${Math.floor(parseInt(lastSegment.timestamp) / 60)}:${parseInt(lastSegment.timestamp) % 60}`;
-  
-  broadcastProgress(4, 100, "Transcription completed successfully");
-  
-  // Create transcript data
-  return {
-    twitterUrl: input.url,
-    videoTitle: `Twitter video ${videoId}`,
-    username: username,
-    duration: duration,
-    language: input.language === "auto" ? "English" : input.language,
-    timestampFormat: input.timestampFormat,
-    segments: segments
-  };
-}
-
-// Helper function to generate mock transcript segments
-function createMockSegments(timestampFormat: string) {
-  const sampleTexts = [
-    "Hi everyone! Today I want to talk about a really interesting topic that's been on my mind lately.",
-    "The way technology is changing how we communicate has been fascinating to observe, especially on platforms like Twitter.",
-    "What's even more interesting is how video content has become such a crucial part of online communication.",
-    "Being able to automatically transcribe these videos makes content more accessible and searchable for everyone.",
-    "That's why I'm excited about tools that help bridge this gap and make video content more usable in different contexts."
-  ];
-  
-  return sampleTexts.map((text, index) => {
-    let timestamp;
-    const seconds = index * 15;
-    
-    if (timestampFormat === "none") {
-      timestamp = "";
-    } else if (timestampFormat === "seconds") {
-      timestamp = `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
-    } else if (timestampFormat === "detailed") {
-      timestamp = `00:${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}.00`;
-    } else {
-      timestamp = seconds.toString();
-    }
-    
-    return { timestamp, text };
-  });
-}
+// Mock data and synthetic generation functionality has been removed
+// to ensure we only use authentic data from Twitter and real transcription
