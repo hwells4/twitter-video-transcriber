@@ -4,6 +4,8 @@ import { storage } from "./storage";
 import { twitterUrlSchema, type TwitterUrlInput, insertTranscriptSchema } from "@shared/schema";
 import { ZodError } from "zod";
 import { fromZodError } from "zod-validation-error";
+import { getTwitterVideoInfo, downloadVideo } from "./services/twitterApi";
+import { extractAudioFromVideo, transcribeAudio, formatTimestamp } from "./services/speechToText";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup API routes
@@ -15,9 +17,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body using the Zod schema
       const input = twitterUrlSchema.parse(req.body);
       
-      // Mock the steps for processing a video
-      // In a real application, we would use Twitter API to fetch the video
-      // and a speech-to-text service to transcribe it
+      // Process the Twitter video and transcribe it
       const result = await processTwitterVideo(input);
       
       // Create a transcript in storage
@@ -100,10 +100,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
 }
 
 // Function to process a Twitter video URL and return a transcript
-// This is a mock implementation that simulates processing a video
-// In a real application, we would use Twitter API to fetch the video
-// and a speech-to-text service to transcribe it
 async function processTwitterVideo(input: TwitterUrlInput) {
+  try {
+    // Step 1: Get Twitter video information including the video URL
+    const videoInfo = await getTwitterVideoInfo(input.url);
+    
+    // Step 2: Download the video
+    const videoBuffer = await downloadVideo(videoInfo.videoUrl);
+    
+    // Step 3: Extract audio from the video
+    const audioPath = await extractAudioFromVideo(videoBuffer);
+    
+    // Step 4: Transcribe the audio
+    const transcriptionResult = await transcribeAudio(audioPath, input.language);
+    
+    // Step 5: Format the segments with the requested timestamp format
+    const segments = transcriptionResult.segments.map(segment => {
+      // Parse the timestamp as seconds
+      const timestampMatch = segment.timestamp.match(/(\d+):(\d+)/);
+      let seconds = 0;
+      
+      if (timestampMatch) {
+        const minutes = parseInt(timestampMatch[1]);
+        const secs = parseInt(timestampMatch[2]);
+        seconds = minutes * 60 + secs;
+      } else {
+        seconds = parseInt(segment.timestamp);
+      }
+      
+      return {
+        timestamp: formatTimestamp(seconds, input.timestampFormat),
+        text: segment.text
+      };
+    });
+    
+    // Calculate duration based on the last segment's timestamp
+    let duration = "0:00";
+    if (segments.length > 0) {
+      const lastSegment = segments[segments.length - 1];
+      duration = lastSegment.timestamp || "0:00";
+    }
+    
+    // Create transcript data
+    return {
+      twitterUrl: input.url,
+      videoTitle: `Tweet by ${videoInfo.authorName}`,
+      username: videoInfo.username,
+      duration: duration,
+      language: transcriptionResult.language,
+      timestampFormat: input.timestampFormat,
+      segments: segments
+    };
+  } catch (error) {
+    console.error('Error processing Twitter video:', error);
+    
+    // If there's an error with the Twitter API, fall back to mock data
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('Falling back to mock transcript data for development');
+      return createMockTranscript(input);
+    }
+    
+    throw new Error(`Failed to process Twitter video: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Helper function to create mock transcript data for development/testing
+function createMockTranscript(input: TwitterUrlInput) {
   // Extract Twitter username and video ID from URL
   const urlMatch = input.url.match(/(?:twitter|x)\.com\/(\w+)\/status\/(\d+)/i);
   
@@ -113,11 +175,8 @@ async function processTwitterVideo(input: TwitterUrlInput) {
   
   const [_, username, videoId] = urlMatch;
   
-  // Simulate processing delay
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
   // Create sample segments based on timestamp format
-  const segments = generateSampleSegments(input.timestampFormat);
+  const segments = createMockSegments(input.timestampFormat);
   
   // Calculate duration based on the last segment's timestamp
   const lastSegment = segments[segments.length - 1];
@@ -137,8 +196,8 @@ async function processTwitterVideo(input: TwitterUrlInput) {
   };
 }
 
-// Helper function to generate sample transcript segments
-function generateSampleSegments(timestampFormat: string) {
+// Helper function to generate mock transcript segments
+function createMockSegments(timestampFormat: string) {
   const sampleTexts = [
     "Hi everyone! Today I want to talk about a really interesting topic that's been on my mind lately.",
     "The way technology is changing how we communicate has been fascinating to observe, especially on platforms like Twitter.",
