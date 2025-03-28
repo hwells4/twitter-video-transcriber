@@ -1,12 +1,52 @@
 import { TwitterApi } from 'twitter-api-v2';
 import axios from 'axios';
 
-// Initialize the Twitter API client with credentials from environment variables
-// @ts-ignore
-const twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN || '');
+// Initialize the Twitter API clients with different auth methods
+// We'll create multiple clients to handle rate limiting better
 
-// Create a read-only client
-const readOnlyClient = twitterClient.readOnly;
+// Check if we have the API key and secret
+const hasApiKeyAndSecret = process.env.TWITTER_API_KEY && process.env.TWITTER_API_SECRET;
+// Check if we have a bearer token
+const hasBearerToken = !!process.env.TWITTER_BEARER_TOKEN;
+
+// Create API clients with different credentials
+let appOnlyClient: TwitterApi | null = null;
+let consumerClient: TwitterApi | null = null;
+
+if (hasBearerToken) {
+  // App-only authentication client
+  appOnlyClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN!);
+}
+
+if (hasApiKeyAndSecret) {
+  // Consumer keys authentication client
+  consumerClient = new TwitterApi({
+    appKey: process.env.TWITTER_API_KEY!,
+    appSecret: process.env.TWITTER_API_SECRET!,
+  });
+}
+
+// Choose an available client
+function getClient() {
+  const errors: string[] = [];
+  
+  // Try the app-only client first (bearer token)
+  if (appOnlyClient) {
+    return appOnlyClient.readOnly;
+  } else {
+    errors.push("No Twitter Bearer Token available");
+  }
+  
+  // Fall back to consumer client if available
+  if (consumerClient) {
+    return consumerClient.readOnly;
+  } else {
+    errors.push("No Twitter API Key/Secret available");
+  }
+  
+  // If we get here, we don't have any valid clients
+  throw new Error(`No valid Twitter API credentials: ${errors.join(', ')}`);
+}
 
 /**
  * Fetches a tweet by its ID
@@ -15,8 +55,11 @@ const readOnlyClient = twitterClient.readOnly;
  */
 export async function getTweetById(tweetId: string) {
   try {
+    // Get the appropriate client
+    const client = getClient();
+    
     // Fetch the tweet with expansions to include media
-    const result = await readOnlyClient.v2.tweets([tweetId], {
+    const result = await client.v2.tweets([tweetId], {
       expansions: ['attachments.media_keys', 'author_id'],
       'media.fields': ['duration_ms', 'height', 'media_key', 'preview_image_url', 'type', 'url', 'width', 'variants'],
       'user.fields': ['name', 'username'],
@@ -24,6 +67,11 @@ export async function getTweetById(tweetId: string) {
     
     return result;
   } catch (error) {
+    // Check if it's a rate limit error
+    if (error instanceof Error && error.message.includes('429')) {
+      throw new Error('Twitter API rate limit exceeded. Please try again later.');
+    }
+    
     console.error('Error fetching tweet:', error);
     throw new Error(`Failed to fetch tweet: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

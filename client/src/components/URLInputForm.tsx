@@ -37,7 +37,25 @@ export default function URLInputForm({
       onProcessingComplete(data);
     },
     onError: (error: Error) => {
-      onError(error.message);
+      // Extract the error message from the error
+      let errorMessage = error.message;
+      
+      // Try to parse the error message if it's from a server error
+      if (errorMessage.includes('Failed to fetch')) {
+        errorMessage = "Could not connect to server. Please check your internet connection and try again.";
+      } else if (errorMessage.includes('Twitter API credentials are missing or invalid')) {
+        errorMessage = "Twitter API authentication failed. Please check your API credentials.";
+      } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+        errorMessage = "Twitter API rate limit exceeded. Please try again in a few minutes.";
+      } else if (errorMessage.includes('not authorized')) {
+        errorMessage = "Not authorized to access this tweet. It may be from a private account.";
+      } else if (errorMessage.includes('No video found')) {
+        errorMessage = "No video found in the tweet. Please try a different tweet URL.";
+      } else if (errorMessage.includes('Tweet not found')) {
+        errorMessage = "Tweet not found. The tweet may be private or deleted.";
+      }
+      
+      onError(errorMessage);
     }
   });
   

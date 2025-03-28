@@ -148,6 +148,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
 function broadcastProgress(step: number, stepProgress: number, message: string) {
   if (!(global as any).wsClients) return;
   
+  // Special case for error notifications (step 0)
+  if (step === 0) {
+    // Send an error message to all clients
+    const errorUpdate = {
+      type: 'error',
+      message,
+      overallProgress: stepProgress // Usually 100 to close the progress meter
+    };
+    
+    // Broadcast the error to all connected clients
+    const clients = (global as any).wsClients as Map<string, WebSocket>;
+    clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(errorUpdate));
+      }
+    });
+    
+    return;
+  }
+  
+  // Regular progress updates
   // Define step status based on progress
   let status: 'pending' | 'active' | 'completed' = 'pending';
   if (stepProgress === 100) {
@@ -246,12 +267,26 @@ async function processTwitterVideo(input: TwitterUrlInput) {
   } catch (error) {
     console.error('Error processing Twitter video:', error);
     
-    // If there's an error with the Twitter API, fall back to mock data
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('Falling back to mock transcript data for development');
-      return await createMockTranscript(input);
+    // Send an appropriate error message based on the error type
+    if (error instanceof Error) {
+      if (error.message.includes('rate limit') || error.message.includes('429')) {
+        // Clear any in-progress WebSocket messages
+        broadcastProgress(0, 100, "Twitter API rate limit exceeded. Please try again later.");
+        throw new Error("Twitter API rate limit exceeded. Please try again in a few minutes.");
+      } else if (error.message.includes('No video found')) {
+        broadcastProgress(0, 100, "No video found in the tweet. Please try a different tweet URL.");
+        throw new Error("No video found in the tweet. Please try a different tweet URL.");
+      } else if (error.message.includes('Tweet not found')) {
+        broadcastProgress(0, 100, "Tweet not found. The tweet may be private or deleted.");
+        throw new Error("Tweet not found. The tweet may be private or deleted.");
+      } else if (error.message.includes('No valid Twitter API credentials')) {
+        broadcastProgress(0, 100, "Twitter API credentials are missing or invalid.");
+        throw new Error("Twitter API credentials are missing or invalid. Please check your environment variables.");
+      }
     }
     
+    // Generic error message
+    broadcastProgress(0, 100, "Failed to process Twitter video. Please try again later.");
     throw new Error(`Failed to process Twitter video: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
