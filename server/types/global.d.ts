@@ -37,3 +37,20 @@ interface AutomaticSpeechRecognitionOutput {
   chunks: TranscriptionChunk[];
   language?: string;
 }
+
+// WebSocket types for progress updates
+declare namespace NodeJS {
+  interface Global {
+    wss: import('ws').WebSocketServer;
+    wsClients: Map<string, import('ws').WebSocket>;
+  }
+}
+
+interface ProgressUpdate {
+  type: 'progress';
+  step: number;
+  progress: number;
+  status: 'pending' | 'active' | 'completed';
+  message: string;
+  overallProgress: number;
+}
