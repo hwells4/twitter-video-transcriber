@@ -85,28 +85,51 @@ export async function transcribeAudio(
     const audioFile = fs.readFileSync(audioPath);
     const wavData = wav.decode(audioFile);
     
-    // Create a transcriber model
-    const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small');
+    // Create a transcriber model with a smaller/faster model
+    // Use 'Xenova/whisper-tiny' instead of 'Xenova/whisper-small' for much lower resource usage
+    console.log('Loading transcription model...');
+    const transcriptionPromise = pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny');
     
-    // Transcribe the audio
-    const result = await transcriber(wavData.channelData[0], {
-      chunk_length_s: 30,
-      stride_length_s: 5,
+    // Add a timeout to prevent hanging
+    const TRANSCRIPTION_TIMEOUT = 60000; // 60 seconds
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Transcription timed out after 60 seconds')), TRANSCRIPTION_TIMEOUT);
+    });
+    
+    // Race between transcription and timeout
+    const transcriber = await Promise.race([transcriptionPromise, timeoutPromise]) as any;
+    console.log('Transcription model loaded, beginning processing...');
+    
+    // Use smaller chunk size to reduce memory usage
+    const transcriptionOptions = {
+      chunk_length_s: 15,       // Smaller chunks (was 30)
+      stride_length_s: 3,       // Smaller stride (was 5)
       language: language === 'auto' ? null : language,
       return_timestamps: true,
-    }) as AutomaticSpeechRecognitionOutput;
+    };
+    
+    // Transcribe with timeout
+    const transcriptionProcessPromise = transcriber(wavData.channelData[0], transcriptionOptions);
+    const result = await Promise.race([
+      transcriptionProcessPromise, 
+      timeoutPromise
+    ]) as AutomaticSpeechRecognitionOutput;
+    
+    console.log('Transcription completed successfully');
     
     // Clean up the audio file
     fs.unlinkSync(audioPath);
     
     // Format the transcript segments with the requested timestamp format
-    const segments = result.chunks.map((chunk: TranscriptionChunk) => {
-      const startTime = formatTimestamp(chunk.timestamp[0], timestampFormat);
-      return {
-        timestamp: startTime,
-        text: chunk.text.trim(),
-      };
-    });
+    const segments = Array.isArray(result.chunks) 
+      ? result.chunks.map((chunk: TranscriptionChunk) => {
+          const startTime = formatTimestamp(chunk.timestamp[0], timestampFormat);
+          return {
+            timestamp: startTime,
+            text: chunk.text.trim(),
+          };
+        })
+      : [{ timestamp: '', text: result.text || 'Transcription completed but no segments available' }];
     
     return {
       segments,
@@ -114,7 +137,29 @@ export async function transcribeAudio(
     };
   } catch (error) {
     console.error('Error transcribing audio:', error);
-    throw new Error(`Failed to transcribe audio: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    // Clean up the audio file even on error
+    try {
+      if (fs.existsSync(audioPath)) {
+        fs.unlinkSync(audioPath);
+      }
+    } catch (cleanupError) {
+      console.error('Error cleaning up audio file:', cleanupError);
+    }
+    
+    // Create a user-friendly error message
+    let errorMessage = 'Failed to transcribe audio';
+    if (error instanceof Error) {
+      if (error.message.includes('timed out')) {
+        errorMessage = 'Transcription timed out. The video may be too long or the server is under high load.';
+      } else if (error.message.includes('memory')) {
+        errorMessage = 'Server ran out of memory while processing. Please try with a shorter video.';
+      } else {
+        errorMessage = `Transcription error: ${error.message}`;
+      }
+    }
+    
+    throw new Error(errorMessage);
   }
 }
 

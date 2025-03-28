@@ -1,5 +1,6 @@
 import express, { type Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import * as fs from 'fs';
 import { storage } from "./storage";
 import { twitterUrlSchema, type TwitterUrlInput, insertTranscriptSchema } from "@shared/schema";
 import { ZodError } from "zod";
@@ -204,6 +205,8 @@ function broadcastProgress(step: number, stepProgress: number, message: string) 
 
 // Function to process a Twitter video URL and return a transcript
 async function processTwitterVideo(input: TwitterUrlInput) {
+  let audioPath: string | null = null;
+  
   try {
     // Step 1: Get Twitter video information including the video URL
     broadcastProgress(1, 10, "Connecting to Twitter API...");
@@ -213,26 +216,70 @@ async function processTwitterVideo(input: TwitterUrlInput) {
     // Step 2: Download the video
     broadcastProgress(2, 10, "Starting video download...");
     const videoBuffer = await downloadVideo(videoInfo.videoUrl);
-    broadcastProgress(2, 100, "Video downloaded successfully");
+    
+    // Check for large videos that might cause memory issues
+    const videoSizeMB = videoBuffer.length / (1024 * 1024);
+    if (videoSizeMB > 20) {
+      throw new Error(`Video is too large (${videoSizeMB.toFixed(1)}MB). For Replit's environment, please use videos under 20MB.`);
+    }
+    
+    broadcastProgress(2, 100, `Video downloaded successfully (${videoSizeMB.toFixed(1)}MB)`);
     
     // Step 3: Extract audio from the video
     broadcastProgress(3, 10, "Extracting audio from video...");
-    const audioPath = await extractAudioFromVideo(videoBuffer);
+    audioPath = await extractAudioFromVideo(videoBuffer);
     broadcastProgress(3, 100, "Audio extracted successfully");
     
     // Step 4: Transcribe the audio with the requested timestamp format
     broadcastProgress(4, 10, "Beginning transcription process...");
-    const transcriptionResult = await transcribeAudio(audioPath, input.language, input.timestampFormat);
-    broadcastProgress(4, 50, "Transcription in progress...");
     
-    // No need to reformat the segments as transcribeAudio now uses the requested format
+    // Set up a timeout for the entire transcription process (separate from internal timeouts)
+    const OVERALL_TIMEOUT = 90000; // 90 seconds
+    
+    // Use a random progress update to show activity while processing
+    let currentProgress = 10;
+    const progressInterval = setInterval(() => {
+      // Increment progress by a small random amount to show activity
+      if (currentProgress < 80) {
+        currentProgress += Math.floor(Math.random() * 5) + 1;
+        broadcastProgress(4, currentProgress, 
+          "Transcription in progress... this may take a minute. Using a smaller model to reduce CPU usage.");
+      }
+    }, 3000);
+    
+    // Create a wrapper promise for the transcription with timeout
+    let transcriptionResult;
+    try {
+      const transcriptionPromise = transcribeAudio(audioPath, input.language, input.timestampFormat);
+      
+      // Create a timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Transcription process timed out after 90 seconds'));
+        }, OVERALL_TIMEOUT);
+      });
+      
+      // Race between transcription and timeout
+      transcriptionResult = await Promise.race([transcriptionPromise, timeoutPromise]);
+      
+      // Clear the progress interval
+      clearInterval(progressInterval);
+    } catch (error) {
+      // Clear the progress interval on error
+      clearInterval(progressInterval);
+      throw error;
+    }
+    
+    broadcastProgress(4, 90, "Formatting transcript...");
+    
+    // Get the segments from the result
     const segments = transcriptionResult.segments;
     
     broadcastProgress(4, 100, "Transcription completed successfully");
     
     // Calculate duration based on the last segment's timestamp
     let duration = "0:00";
-    if (segments.length > 0) {
+    if (segments && segments.length > 0) {
       const lastSegment = segments[segments.length - 1];
       duration = lastSegment.timestamp || "0:00";
     }
@@ -250,10 +297,18 @@ async function processTwitterVideo(input: TwitterUrlInput) {
   } catch (error) {
     console.error('Error processing Twitter video:', error);
     
-    // Send an appropriate error message based on the error type
+    // Clean up audio file if it exists
+    if (audioPath && fs.existsSync(audioPath)) {
+      try {
+        fs.unlinkSync(audioPath);
+      } catch (cleanupError) {
+        console.error('Error cleaning up audio file:', cleanupError);
+      }
+    }
+    
+    // Send specific error message based on the error type
     if (error instanceof Error) {
       if (error.message.includes('rate limit') || error.message.includes('429')) {
-        // Clear any in-progress WebSocket messages
         broadcastProgress(0, 100, "Twitter API rate limit exceeded. Please try again later.");
         throw new Error("Twitter API rate limit exceeded. Please try again in a few minutes.");
       } else if (error.message.includes('No video found')) {
@@ -265,12 +320,25 @@ async function processTwitterVideo(input: TwitterUrlInput) {
       } else if (error.message.includes('No valid Twitter API credentials')) {
         broadcastProgress(0, 100, "Twitter API credentials are missing or invalid.");
         throw new Error("Twitter API credentials are missing or invalid. Please check your environment variables.");
+      } else if (error.message.includes('timed out')) {
+        broadcastProgress(0, 100, "Transcription process timed out. Try a shorter video or try again later.");
+        throw new Error("Transcription process timed out. The video may be too long or complex for processing.");
+      } else if (error.message.includes('too large')) {
+        broadcastProgress(0, 100, error.message);
+        throw error;
+      } else if (error.message.includes('memory')) {
+        broadcastProgress(0, 100, "Server ran out of memory. Please try a shorter video.");
+        throw new Error("Server ran out of memory while processing. Please try a shorter video.");
       }
+      
+      // For other errors, send the specific error message
+      broadcastProgress(0, 100, `Error: ${error.message}`);
+      throw error;
     }
     
-    // Generic error message
+    // Generic error message for non-Error objects
     broadcastProgress(0, 100, "Failed to process Twitter video. Please try again later.");
-    throw new Error(`Failed to process Twitter video: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error("Failed to process Twitter video. Unknown error occurred.");
   }
 }
 
