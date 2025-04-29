@@ -217,17 +217,19 @@ async function processTwitterVideo(input: TwitterUrlInput) {
     broadcastProgress(2, 10, "Starting video download...");
     const videoBuffer = await downloadVideo(videoInfo.videoUrl);
     
-    // Check for large videos that might cause memory issues
+    // Log video size but don't restrict it
     const videoSizeMB = videoBuffer.length / (1024 * 1024);
-    if (videoSizeMB > 20) {
-      throw new Error(`Video is too large (${videoSizeMB.toFixed(1)}MB). For Replit's environment, please use videos under 20MB.`);
-    }
     
     broadcastProgress(2, 100, `Video downloaded successfully (${videoSizeMB.toFixed(1)}MB)`);
     
     // Step 3: Extract audio from the video
     broadcastProgress(3, 10, "Extracting audio from video...");
     audioPath = await extractAudioFromVideo(videoBuffer);
+    
+    // Free up memory - we don't need the video buffer anymore
+    // @ts-ignore - TypeScript doesn't know about global.gc
+    if (global.gc) try { global.gc(); } catch (e) { /* ignore */ }
+    
     broadcastProgress(3, 100, "Audio extracted successfully");
     
     // Step 4: Transcribe the audio with the requested timestamp format
@@ -277,6 +279,19 @@ async function processTwitterVideo(input: TwitterUrlInput) {
     
     broadcastProgress(4, 100, "Transcription completed successfully");
     
+    // Clean up audio file if it exists - we don't need it anymore
+    if (audioPath && fs.existsSync(audioPath)) {
+      try {
+        fs.unlinkSync(audioPath);
+        console.log("Audio file cleaned up after successful transcription");
+        // Try to force garbage collection to free up memory
+        // @ts-ignore - TypeScript doesn't know about global.gc
+        if (global.gc) try { global.gc(); } catch (e) { /* ignore */ }
+      } catch (cleanupError) {
+        console.error('Error cleaning up audio file:', cleanupError);
+      }
+    }
+    
     // Calculate duration based on the last segment's timestamp
     let duration = "0:00";
     if (segments && segments.length > 0) {
@@ -323,9 +338,6 @@ async function processTwitterVideo(input: TwitterUrlInput) {
       } else if (error.message.includes('timed out')) {
         broadcastProgress(0, 100, "Transcription process timed out. Try a shorter video or try again later.");
         throw new Error("Transcription process timed out. The video may be too long or complex for processing.");
-      } else if (error.message.includes('too large')) {
-        broadcastProgress(0, 100, error.message);
-        throw error;
       } else if (error.message.includes('memory')) {
         broadcastProgress(0, 100, "Server ran out of memory. Please try a shorter video.");
         throw new Error("Server ran out of memory while processing. Please try a shorter video.");
